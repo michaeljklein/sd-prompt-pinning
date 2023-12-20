@@ -1,5 +1,6 @@
-demos/
+sd-prompt-pinning-test-cases/
 *.png
+.DS_Store
 
 flip/
 

@@ -154,8 +154,17 @@ Likewise, if visually-distinct target images are used, the algorithm is
 effectively finding the "visual average," which is likely to be blurry,
 distorted, or otherwise indistinct.
 
+#### Debugging
+
+- Upper right graph of `cma_plot.png` shows divergence
+  + It's likely that it's not sampling "wide" enough, or is way too wide:
+    * If way too wide, try lowering the initial population radius and STD
+    * If not wide enough, try increasing the CFG scale, batch size, or `lambda_`
+
 
 ## Test runs (in progress.. 🚧)
+
+[sd-prompt-pinning-test-cases](https://github.com/michaeljklein/sd-prompt-pinning-test-cases)
 
 - First larger batch:
   + `00000054`
@@ -173,8 +182,10 @@ distorted, or otherwise indistinct.
   + User target image scaled to 256x256
     * `convert ~/Downloads/target_image_marble_apple.png -resize 256x256 target_image_marble_apple_downsized_256x256_civitai.com_images_1952814.png`
   + From [https://civitai.com/images/1952814](https://civitai.com/images/1952814)
+  + Notes: incomplete batch
 
 - First attempt from single batch image:
+  + `00000074`
   + Prompt: `valley, fairytale treehouse village covered, , matte painting, highly detailed, dynamic lighting, cinematic, realism, realistic, photo real, sunset, detailed, high contrast, denoised, centered, michael whelan`
   + Negative prompt: `(worst quality, low quality, normal quality, lowres, low details, oversaturated, undersaturated, overexposed, underexposed, grayscale, bw, bad photo, bad photography, bad art:1.4), (watermark, signature, text font, username, error, logo, words, letters, digits, autograph, trademark, name:1.2), (blur, blurry, grainy), morbid, ugly, asymmetrical, mutated malformed, mutilated, poorly lit, bad shadow, draft, cropped, out of frame, cut off, censored, jpeg artifacts, out of focus, glitch, duplicate, (airbrushed, cartoon, anime, semi-realistic, cgi, render, blender, digital art, manga, amateur:1.3), (3D ,3D Game, 3D Game Scene, 3D Character:1.1), (bad hands, bad anatomy, bad body, bad face, bad teeth, bad arms, bad legs, deformities:1.3)`
   + Batch size 8
@@ -189,6 +200,21 @@ distorted, or otherwise indistinct.
   + `00000091`
   + Prompt: `one marble apple fruit, apple made out of marble, centered to the left on a metal steel chef table, rule of thirds, hd, perfect shading, professional photograph`
   + Negative prompt: `4K, bad quality, worst quality, computer, iphone, phone, render, rendering, bunch, red apple, yellow apple`
+  + Batch size 4
+  + CFG 7.5
+  + Size: 416x256 (`256 * golden_ratio`, rounded up to being divisible by `2^5`)
+  + Initial STD `0.05``
+  + Initial centroid radius `0.1`
+  + Size-limiter `1.0`
+  + Size-limiter weight `100`
+  + Target image from first batch: `blue_marble_apple.png`
+  + From [https://civitai.com/images/1747029](https://civitai.com/images/1747029)
+
+
+- loss pinning test
+  + `00000092`
+  + Prompt: `one marble apple fruit, centered to the left on a metal steel chef table, rule of thirds, hd, perfect shading, professional photograph`
+  + Negative prompt: `4K, bad quality, worst quality, computer, iphone, phone, render, rendering, bunch`
   + Batch size 4
   + CFG 7.5
   + Size: 416x256 (`256 * golden_ratio`, rounded up to being divisible by `2^5`)
