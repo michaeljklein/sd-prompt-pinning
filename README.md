@@ -9,6 +9,15 @@ based on:
 - [ꟻLIP](https://github.com/NVlabs/flip) as a basis for a custom loss function
 
 
+## Dependencies
+
+This extension depends on
+[https://github.com/picobyte/stable-diffusion-webui-wd14-tagger](picobyte/stable-diffusion-webui-wd14-tagger)
+for image tagging, but it could possibly be made into an optional dependency.
+(If it's an issue for your use case, I expect it to be straightforward to disable
+in the script file as it's non-essential.)
+
+
 ## Problem
 
 - Variation in prompts is hard to “pin down”: it can be difficult to tell which parts of the prompts are “locking in” a particular result.
@@ -24,7 +33,6 @@ based on:
         - CLIP-based analysis to allow pinning a result to a particular (set of) goal tag(s)
           + Will need to add the following to `metadata.ini`
           + `Requires = stable-diffusion-webui-tokenizer`
-        - Multi-goal optimization to allow pinning to multiple goals
 
 
 ## Solution
@@ -47,21 +55,51 @@ CMA (covariant matrix adaptation) is an efficient automatic evolutionary optimiz
 
 ### Options
 
-Parameter	            | Default	                                               | Details
---------------------- | ------------------------------------------------------ | -----------------------------------------------------------------------------------------
-Target Images         | `None`                                                 | Use the provided image(s) as a target instead of the first generated batch
-CMA Logging           | `True`                                                 | Log CMA info to CLI (stdout)
-CMA Seed              | `[calculated from seed, subseed]`                      | Numpy seed, used for CMA sampling
-Number of generations | `int(16 * floor(log(N)))`                              | Number of generations
-`lambda_`             | `int(4 + 3 * log(N))`                                  | Number of children to produce at each generation, `N` is the individual's size (integer).
-`mu`                  | `int(lambda_ / 2)`                                     | The number of parents to keep from the lambda children (integer).
-`cmatrix`             | `identity(N)`                                          | The initial covariance matrix of the distribution that will be sampled.
-`weights`             | `"superlinear"`                                        | Decrease speed, can be `"superlinear"`, `"linear"` or `"equal"`.
-`cs`                  | `(mueff + 2) / (N + mueff + 3)`                        | Cumulation constant for step-size.
-`damps`               | `1 + 2 * max(0, sqrt((mueff - 1) / (N + 1)) - 1) + cs` | Damping for step-size.
-`ccum`                | `4 / (N + 4)`                                          | Cumulation constant for covariance matrix.
-`ccov1`               | `2 / ((N + 1.3)^2 + mueff)`                            | Learning rate for rank-one update.
-`ccovmu`              | `2 * (mueff - 2 + 1 / mueff) / ((N + 2)^2 + mueff)`    | Learning rate for rank-mu update.
+Parameter	                   | Default	                                               | Details
+---------------------        | ------------------------------------------------------- | -----------------------------------------------------------------------------------------------------------------
+Target Images                | `None`                                                  | Use the provided image(s) as a target instead of the first generated batch
+CMA Logging                  | `True`                                                  | Log CMA info to CLI (stdout)
+CMA Seed                     | `[calculated from seed, subseed]`                       | Numpy seed, used for CMA sampling
+Number of generations        | `int(16 * floor(log(N)))`                               | Number of generations
+Initial population STD       | `0.05`                                                  | CMA initial population STD
+Initial population radius    | `0.25`                                                  | Radius of uniform distribution for CMA initial population
+Multi-objective size limiter | `0`                                                     | Disabled when `0`. Apply a penalty using a multi-objective CMA when more than this distance from original prompt
+Size limit error             | `[size limiter] / 100`                                  | Error for multi-objective size limiter: vectors within this distance are "close"
+Size limit weight            | `[size limiter] * 10`                                   | Weight for multi-objective size limiter penalty
+`lambda_`                    | `int(4 + 3 * log(N))`                                   | Number of children to produce at each generation, `N` is the individual's size (integer).
+`mu`                         | `int(lambda_ / 2)`                                      | The number of parents to keep from the lambda children (integer).
+`cmatrix`                    | `identity(N)`                                           | The initial covariance matrix of the distribution that will be sampled.
+`weights`                    | `"superlinear"`                                         | Decrease speed, can be `"superlinear"`, `"linear"` or `"equal"`.
+`cs`                         | `(mueff + 2) / (N + mueff + 3)`                         | Cumulation constant for step-size.
+`damps`                      | `1 + 2 * max(0, sqrt((mueff - 1) / (N + 1)) - 1) + cs`  | Damping for step-size.
+`ccum`                       | `4 / (N + 4)`                                           | Cumulation constant for covariance matrix.
+`ccov1`                      | `2 / ((N + 1.3)^2 + mueff)`                             | Learning rate for rank-one update.
+`ccovmu`                     | `2 * (mueff - 2 + 1 / mueff) / ((N + 2)^2 + mueff)`     | Learning rate for rank-mu update.
+
+NOTE: Some parameters may not work when multi-objective size limiting is enabled.
+The allowed parameters when multi-objective optimization are as follows:
+(Some options may not yet be available in the UI.)
+
+ Parameter    | Default                 | Details                   
+------------- | ----------------------- | ------------------------------------------------
+ `mu`         | `len(population)`       | The number of parents to use in the evolution. 
+------------- | ----------------------- | ------------------------------------------------
+ `lambda_`    | `1`                     | Number of children to produce at each generation 
+------------- | ----------------------- | ------------------------------------------------
+ `d`          | `1.0 + N / 2.0`         | Damping for step-size.    
+------------- | ----------------------- | ------------------------------------------------
+ `ptarg`      | `1.0 / (5 + 1.0 / 2.0)` | Target success rate.      
+------------- | ----------------------- | ------------------------------------------------
+ `cp`         | `ptarg / (2.0 + ptarg)` | Step size learning rate.  
+------------- | ----------------------- | ------------------------------------------------
+ `cc`         | `2.0 / (N + 2.0)`       | Cumulation time horizon.  
+------------- | ----------------------- | ------------------------------------------------
+ `ccov`       | `2.0 / (N**2 + 6.0)`    | Covariance matrix learning
+              |                         | rate.                     
+------------- | ----------------------- | ------------------------------------------------
+ `pthresh`    | `0.44`                  | Threshold success rate.   
+------------- | ----------------------- | ------------------------------------------------
+
 
 Ref. `Hansen and Ostermeier, 2001. Completely Derandomized Self-Adaptation in Evolution Strategies. Evolutionary Computation`
 
@@ -117,7 +155,7 @@ effectively finding the "visual average," which is likely to be blurry,
 distorted, or otherwise indistinct.
 
 
-## Demos
+## Test runs (in progress.. 🚧)
 
 - First larger batch:
   + `00000054`
@@ -136,6 +174,30 @@ distorted, or otherwise indistinct.
     * `convert ~/Downloads/target_image_marble_apple.png -resize 256x256 target_image_marble_apple_downsized_256x256_civitai.com_images_1952814.png`
   + From [https://civitai.com/images/1952814](https://civitai.com/images/1952814)
 
+- First attempt from single batch image:
+  + Prompt: `valley, fairytale treehouse village covered, , matte painting, highly detailed, dynamic lighting, cinematic, realism, realistic, photo real, sunset, detailed, high contrast, denoised, centered, michael whelan`
+  + Negative prompt: `(worst quality, low quality, normal quality, lowres, low details, oversaturated, undersaturated, overexposed, underexposed, grayscale, bw, bad photo, bad photography, bad art:1.4), (watermark, signature, text font, username, error, logo, words, letters, digits, autograph, trademark, name:1.2), (blur, blurry, grainy), morbid, ugly, asymmetrical, mutated malformed, mutilated, poorly lit, bad shadow, draft, cropped, out of frame, cut off, censored, jpeg artifacts, out of focus, glitch, duplicate, (airbrushed, cartoon, anime, semi-realistic, cgi, render, blender, digital art, manga, amateur:1.3), (3D ,3D Game, 3D Game Scene, 3D Character:1.1), (bad hands, bad anatomy, bad body, bad face, bad teeth, bad arms, bad legs, deformities:1.3)`
+  + Batch size 8
+  + CFG 5.5
+  + Size: 256x256
+  + Initial STD 0.25
+  + Initial centroid radius 0.33
+  + Target image from first batch
+  + From [https://civitai.com/images/1747029](https://civitai.com/images/1747029)
+
+- First multi-objective attempt with single batch image:
+  + `00000091`
+  + Prompt: `one marble apple fruit, apple made out of marble, centered to the left on a metal steel chef table, rule of thirds, hd, perfect shading, professional photograph`
+  + Negative prompt: `4K, bad quality, worst quality, computer, iphone, phone, render, rendering, bunch, red apple, yellow apple`
+  + Batch size 4
+  + CFG 7.5
+  + Size: 416x256 (`256 * golden_ratio`, rounded up to being divisible by `2^5`)
+  + Initial STD `0.05``
+  + Initial centroid radius `0.1`
+  + Size-limiter `1.0`
+  + Size-limiter weight `100`
+  + Target image from first batch: `blue_marble_apple.png`
+  + From [https://civitai.com/images/1747029](https://civitai.com/images/1747029)
 
 ## References
 

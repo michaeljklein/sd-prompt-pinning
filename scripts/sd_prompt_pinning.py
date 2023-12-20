@@ -12,6 +12,10 @@
 # - typography test
 #   + best quality, capital letter T, written, ink, inscribed, signature, artistic
 #   + engraving, bold, italic, messy, scattered, blot
+# - loss pinning test
+#   + one marble apple fruit, centered to the left on a metal steel chef table, rule of thirds, hd, perfect shading, professional photograph
+#   + 4K, bad quality, worst quality, computer, iphone, phone, render, rendering, bunch
+
 
 # import code
 # code.interact(local=locals())
@@ -86,8 +90,16 @@ else:
     print('patched flip_loss.py for RGB color space')
 
 sys.path.append(flip_pytorch_path)
-from flip_loss_patched import LDRFLIPLoss, color_space_transform, feature_detection, generate_spatial_filter, hunt_adjustment, hyab, redistribute_errors, spatial_filter
+from flip_loss_patched import color_space_transform, feature_detection, generate_spatial_filter, hunt_adjustment, hyab, redistribute_errors, spatial_filter # LDRFLIPLoss,
 sys.path.remove(flip_pytorch_path)
+
+# stable-diffusion-webui-wd14-tagger
+extension_directory = os.path.dirname(this_extension_directory)
+tagger_path = os.path.join(extension_directory, 'stable-diffusion-webui-wd14-tagger')
+sys.path.append(tagger_path)
+from tagger import interrogator as tagger_interrogator
+from tagger import utils as tagger_utils
+sys.path.remove(tagger_path)
 
 ####################################################################################
 # END IMPORTS
@@ -594,6 +606,7 @@ class PromptPinFiles:
             html_file.write("<img src='cma_plot.png' title='CMA Stats'>\n")
             html_file.write("<br>\n")
             html_file.write("<div id=\"main-table\"></div>\n")
+            html_file.write("<div>Loading table may take some time. Check the 'Sources' tab, if available, to see images loading.</div>\n")
             html_file.write("<script type=\"text/javascript\">\n")
             html_file.write("  function main() {\n")
             html_file.write("    var table = new Tabulator(\"#main-table\", {\n")
@@ -690,6 +703,81 @@ class PromptPinFiles:
 # END DETERMINISTIC-ENOUGH SAVING
 ############################################################################################################
 
+############################################################################################################
+# BEGIN wd14-tagger
+############################################################################################################
+
+
+# from tagger import interrogator as tagger_interrogator
+# from tagger import utils as tagger_utils
+
+# http://localhost:7860/tagger/v1/interrogators
+# {"models":["wd14-vit.v1","wd14-vit.v2","wd14-convnext.v1","wd14-convnext.v2","wd14-convnextv2.v1","wd14-swinv2-v1","wd-v1-4-moat-tagger.v2","mld-caformer.dec-5-97527","mld-tresnetd.6-30000"]}
+
+# stable-diffusion-webui-wd14-tagger/tagger/utils.py
+# - interrogators: Dict[str, Interrogator]
+# - def refresh_interrogators() -> List[str]
+#
+# Interrogator
+# def interrogate(
+#         self,
+#         image: Image
+#     )
+#
+# interrogator = utils.interrogators[model_name]
+# ratings, tags = interrogator.interrogate(pil_image)
+#
+#
+# def ui(..):
+#
+#     # not directly listed
+#     info = gr.HTML(
+#         label='Info',
+#         interactive=False,
+#         elem_classes=['info']
+#     )
+#
+#     unload_all_models = gr.Button(
+#         value='Unload all interrogate models'
+#     )
+#
+#     with gr.Row(variant='compact'):
+#         def refresh():
+#             utils.refresh_interrogators()
+#             return sorted(x.name for x in utils.interrogators
+#                                                .values())
+#         interrogator_names = refresh()
+#         interrogator = utils.preset.component(
+#             gr.Dropdown,
+#             label='Interrogator',
+#             choices=interrogator_names,
+#             value=(
+#                 None
+#                 if len(interrogator_names) < 1 else
+#                 interrogator_names[-1]
+#             )
+#         )
+#
+#         ui.create_refresh_button(
+#             interrogator,
+#             lambda: None,
+#             lambda: {'choices': refresh()},
+#             'refresh_interrogator'
+#         )
+#
+#
+#     stable-diffusion-webui-wd14-tagger/tagger/ui.py (unload_interrogators)
+#     unload_all_models.click(fn=unload_interrogators, outputs=[info])
+
+
+
+# # only implemented for waifu diffusion
+# large_batch_interrogate(self, images: List, dry_run=False)
+
+
+############################################################################################################
+# END wd14-tagger
+############################################################################################################
 
 
 ####################################################################################
@@ -754,9 +842,9 @@ class PromptPinningScript(scripts.Script):
                     label="Initial Population Centroid Radius",
                     info='Radius of the uniform distribution that the initial population is drawn from',
                     minimum=0.001,
-                    maximum=2,
+                    maximum=2.0,
                     step=0.001,
-                    value=1.0
+                    value=0.25
                 )
 
                 # key = 'cma_initial_population_std'
@@ -764,9 +852,36 @@ class PromptPinningScript(scripts.Script):
                     label="Initial Population STD",
                     info='Standard deviation of the initial population',
                     minimum=0.001,
-                    maximum=2,
+                    maximum=2.0,
                     step=0.001,
-                    value=1.0
+                    value=0.05
+                )
+
+                cma_limited_size = gr.Slider(
+                    label="CMA Multi-objective size limiter (set to zero to disable)",
+                    info='Maximum distance from original prompt before a penalty applies: leave zero to disable',
+                    minimum=0,
+                    maximum=10,
+                    step=0.001,
+                    value=0
+                )
+
+                cma_limited_size_eps = gr.Slider(
+                    label="Size limit error",
+                    info='Allowed error for a set of prompt weights to be "close" to another',
+                    minimum=0,
+                    maximum=10,
+                    step=0.001,
+                    value=0
+                )
+
+                cma_limited_size_weight = gr.Slider(
+                    label="Size limit weight",
+                    info='How much to weight the objective of limiting the distance from the origin prompt',
+                    minimum=0,
+                    maximum=1000000,
+                    step=0.1,
+                    value=0
                 )
 
                 # key = 'lambda_'
@@ -842,6 +957,9 @@ class PromptPinningScript(scripts.Script):
                 cma_number_of_generations,
                 cma_initial_population_centroid_radius,
                 cma_initial_population_std,
+                cma_limited_size,
+                cma_limited_size_eps,
+                cma_limited_size_weight,
                 cma_lambda,
                 cma_mu,
                 cma_weights,
@@ -902,6 +1020,7 @@ class PromptPinningScript(scripts.Script):
         # TODO: cleanup arg and missing arg handling
         top_level_desc, cma_cli_log, user_target_images, cma_seed, cma_number_of_generations, *rest_args = args
         cma_initial_population_centroid_radius, cma_initial_population_std, *rest_args = rest_args
+        cma_limited_size, cma_limited_size_eps, cma_limited_size_weight, *rest_args = rest_args
         cma_lambda, cma_mu, cma_weights, cma_cs, cma_damps, cma_ccum, *rest_args = rest_args
         cma_ccov1, cma_ccovmu = rest_args
 
@@ -935,15 +1054,30 @@ class PromptPinningScript(scripts.Script):
 
         if missing_arg(cma_initial_population_centroid_radius):
             # radius of the initial population centroid
-            initial_population_centroid_radius = 1.0
+            initial_population_centroid_radius = 0.25
         else:
             initial_population_centroid_radius = float(cma_initial_population_centroid_radius)
 
         if missing_arg(cma_initial_population_std):
             # initial standard deviation of the CMA algorithm: would <= 1.0 be best, e.g. 0.1?
-            initial_population_std = 1.0
+            initial_population_std = 0.05
         else:
             initial_population_std = float(cma_initial_population_std)
+
+        if missing_arg(cma_limited_size):
+            cma_limited_size = 0
+        else:
+            cma_limited_size = float(cma_limited_size)
+
+        if missing_arg(cma_limited_size_eps):
+            cma_limited_size_eps = cma_limited_size / 100
+        else:
+            cma_limited_size_eps = float(cma_limited_size_eps)
+
+        if missing_arg(cma_limited_size_weight):
+            cma_limited_size_weight = cma_limited_size * 10.0
+        else:
+            cma_limited_size_weight = float(cma_limited_size_weight)
 
         strategy_kwargs = {}
 
@@ -1067,12 +1201,13 @@ class PromptPinningScript(scripts.Script):
             ##############################################################################################################################
 
             current_images_gif_path = os.path.join(prompt_pin_files.get_instance_path(generation_number, attention_weights), 'summary.gif')
-            current_images[0].save(
-                current_images_gif_path,
-                save_all=True,
-                append_images=current_images[1:], # drop(1)
-                duration=50 * len(current_images),
-                loop=0) # forever
+            if len(current_images) != 0:
+                current_images[0].save(
+                    current_images_gif_path,
+                    save_all=True,
+                    append_images=current_images[1:], # drop(1)
+                    duration=50 * len(current_images),
+                    loop=0) # forever
 
             ##############################################################################################################################
             # END GIF
@@ -1139,6 +1274,35 @@ class PromptPinningScript(scripts.Script):
 
             return (calculated_loss,)
 
+
+        # seed output with target
+        initial_zero_array = np.zeros(N, dtype=float)
+        if user_target_images is not None:
+            print('skipping seeding initial output because user inputs provided')
+        else:
+            print('seeding initial output..')
+            initial_output = evaluate_individual_vector(initial_zero_array)
+            print('initial output:')
+            print(initial_output)
+
+        # TODO: update naming
+        NGEN = number_of_generations
+
+        # Objects that will compile the data
+        sigma = np.ndarray((NGEN,1))
+        axis_ratio = np.ndarray((NGEN,1))
+        diagD = np.ndarray((NGEN,N))
+        fbest = np.ndarray((NGEN,1))
+        best = np.ndarray((NGEN,N))
+        std = np.ndarray((NGEN,N))
+
+
+        # # TODO: cleanup if warning goes away (has already been created..)
+        # if 'deap_creator.FitnessMin' in globals():
+        del deap_creator.FitnessMin
+        # if 'deap_creator.Individual' in globals():
+        del deap_creator.Individual
+
         # we want to minimize the derived FLIP metric(s)
         deap_creator.create("FitnessMin", deap_base.Fitness, weights=(-1.0,))
 
@@ -1146,16 +1310,9 @@ class PromptPinningScript(scripts.Script):
         deap_creator.create("Individual", np.ndarray, fitness=deap_creator.FitnessMin)
 
         toolbox = deap_base.Toolbox()
-        toolbox.register("evaluate", evaluate_individual_vector)
 
         # number of "winning" individuals in the hall of fame
         size_of_hall_of_fame = 1
-
-        # the centroid (initial population) is set to a random vector in [-r, r]^N
-        initial_population_centroid = np.random.uniform(-initial_population_centroid_radius, initial_population_centroid_radius, N)
-        strategy = cma.Strategy(centroid=initial_population_centroid, sigma=initial_population_std, **strategy_kwargs)
-        toolbox.register("generate", strategy.generate, deap_creator.Individual)
-        toolbox.register("update", strategy.update)
 
         # setup the hall-of-fame (most fit individual records) and stats
         halloffame = deap_tools.HallOfFame(size_of_hall_of_fame, similar=np.allclose)    
@@ -1169,27 +1326,49 @@ class PromptPinningScript(scripts.Script):
         logbook = deap_tools.Logbook()
         logbook.header = "gen", "evals", "std", "min", "avg", "max"
 
-        # TODO: update naming
-        NGEN = number_of_generations
+        toolbox.register("evaluate", evaluate_individual_vector)
+        initial_population_centroid = np.random.uniform(-initial_population_centroid_radius, initial_population_centroid_radius, N)
 
-        # Objects that will compile the data
-        sigma = np.ndarray((NGEN,1))
-        axis_ratio = np.ndarray((NGEN,1))
-        diagD = np.ndarray((NGEN,N))
-        fbest = np.ndarray((NGEN,1))
-        best = np.ndarray((NGEN,N))
-        std = np.ndarray((NGEN,N))
-
-        # seed output with target
-        initial_zero_array = np.zeros(N, dtype=float)
-        if user_target_images is not None:
-            print('skipping seeding initial output because user inputs provided')
+        if cma_limited_size == 0:
+            # the centroid (initial population) is set to a random vector in [-r, r]^N
+            strategy = cma.Strategy(centroid=initial_population_centroid, sigma=initial_population_std, **strategy_kwargs)
         else:
-            print('seeding initial output..')
-            initial_output = evaluate_individual_vector(initial_zero_array)
-            print('initial output:')
-            print(initial_output)
+            def limited_size_distance(feasible_ind, original_ind):
+                """A distance function to the feasibility region."""
+                diff_vect = np.subtract(feasible_ind, original_ind)
+                return np.dot(diff_vect, diff_vect)
 
+            def limited_size_closest_feasible(individual):
+                """A function returning a valid individual from an invalid one."""
+                feasible_ind = individual * (cma_limited_size / np.linalg.norm(individual))
+                return feasible_ind
+
+            def limited_size_valid(individual):
+                """Determines if the individual is valid or not."""
+                return np.dot(individual, individual) < cma_limited_size
+
+            def limited_size_close_valid(individual):
+                """Determines if the individual is close to valid."""
+                return np.dot(individual, individual) < (cma_limited_size + cma_limited_size_eps)
+
+            # StrategyMultiObjective needs a full initial population
+            population = [deap_creator.Individual(initial_population_centroid)]
+            fitnesses = toolbox.map(toolbox.evaluate, population)
+            for ind, fit in zip(population, fitnesses):
+                # break when nan (i.e. fitness calculation was interrupted)
+                if np.isnan(fit):
+                    break
+
+                ind.fitness.values = fit
+
+            toolbox.decorate("evaluate", deap_tools.ClosestValidPenalty(limited_size_valid, limited_size_closest_feasible, cma_limited_size_weight, limited_size_distance))
+            strategy = cma.StrategyMultiObjective(population, sigma=initial_population_std, **strategy_kwargs)
+
+
+        toolbox.register("generate", strategy.generate, deap_creator.Individual)
+        toolbox.register("update", strategy.update)
+
+        fitness_history = []
         for gen in range(NGEN):
             generation_number = gen + 1
             print('(generation_number, number_of_generations)')
@@ -1213,6 +1392,7 @@ class PromptPinningScript(scripts.Script):
                     break
 
                 ind.fitness.values = fit
+                fitness_history.append(fit)
 
             # Update the strategy with the evaluated individuals
             toolbox.update(population)
@@ -1220,18 +1400,32 @@ class PromptPinningScript(scripts.Script):
             # Update the hall of fame and the statistics with the
             # currently evaluated population
             halloffame.update(population)
-            record = stats.compile(population)
-            logbook.record(evals=len(population), gen=gen, **record)
+            try:
+                record = stats.compile(population)
+                logbook.record(evals=len(population), gen=gen, **record)
+            except TypeError as e:
+                print(f"compiling stats for population failed with error:\n  {e}")
+                print()
 
             if cma_cli_log:
                 print('gen, evals, std, min, avg, max')
-                print(logbook.stream)
+                try:
+                    print(logbook.stream)
+                except ValueError as e:
+                    print(f"printing lobgook failed with error:\n  {e}")
+                    print()
 
             # Save more data along the evolution for latter plotting
             # diagD is sorted and sqrooted in the update method
-            sigma[gen] = strategy.sigma
-            axis_ratio[gen] = max(strategy.diagD)**2/min(strategy.diagD)**2
-            diagD[gen, :N] = strategy.diagD**2
+            try:
+                sigma[gen] = strategy.sigma
+                axis_ratio[gen] = max(strategy.diagD)**2/min(strategy.diagD)**2
+                diagD[gen, :N] = strategy.diagD**2
+            except AttributeError:
+                sigma[gen] = np.mean(strategy.sigmas)
+                axis_ratio[gen] = 0.0
+                diagD[gen, :N] = 0.0
+
             fbest[gen] = halloffame[0].fitness.values
             best[gen, :N] = halloffame[0]
             std[gen, :N] = np.std(population, axis=0)
@@ -1329,6 +1523,54 @@ class PromptPinningScript(scripts.Script):
         plt.savefig(cma_plot_filepath)
         plt.close('all')
         print(f"saved plot to: {cma_plot_filepath}")
+
+        # multi objective plot
+        if cma_limited_size != 0:
+            fig = plt.figure()
+            plt.title("Multi-objective minimization via MO-CMA-ES")
+            plt.xlabel("First objective (function) to minimize")
+            plt.ylabel("Second objective (function) to minimize")
+
+            # Limit the scale because our history values include the penalty.
+            plt.xlim((-0.1, 1.20))
+            plt.ylim((-0.1, 1.20))
+
+            # Plot all history. Note the values include the penalty.
+            fitness_history = list(map(lambda xs: xs[0], fitness_history))
+
+            # TODO: cleanup
+            print('fitness_history')
+            print(fitness_history)
+
+            plt.scatter(range(len(fitness_history)), np.asarray(fitness_history),
+                facecolors='none', edgecolors="lightblue")
+
+            valid_front = np.array([ind.fitness.values for ind in strategy.parents if limited_size_close_valid(ind)])
+            invalid_front = np.array([ind.fitness.values for ind in strategy.parents if not limited_size_close_valid(ind)])
+
+            # TODO: cleanup after larger batch test
+            print('valid_front')
+            print(valid_front)
+            print()
+            print('invalid_front')
+            print(invalid_front)
+            print()
+
+            if len(valid_front) > 0:
+                # plt.scatter(valid_front[:,0], valid_front[:,1], c="g")
+                plt.scatter(range(len(valid_front)), valid_front, c="g")
+            if len(invalid_front) > 0:
+                # plt.scatter(invalid_front[:,0], invalid_front[:,1], c="r")
+                plt.scatter(range(len(invalid_front)), invalid_front, c="g")
+
+            cma_mo_plot_filepath = os.path.join(prompt_pin_files.prompt_pin_path, 'cma_mo_plot.png')
+            plt.savefig(cma_mo_plot_filepath)
+            plt.close('all')
+            print(f"saved multi-objective plot to: {cma_mo_plot_filepath}")
+
+
+
+
 
         ##############################################################################################################################
         # END FINAL CMA PLOT
