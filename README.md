@@ -83,22 +83,13 @@ The allowed parameters when multi-objective optimization are as follows:
  Parameter    | Default                 | Details                   
 ------------- | ----------------------- | ------------------------------------------------
  `mu`         | `len(population)`       | The number of parents to use in the evolution. 
-------------- | ----------------------- | ------------------------------------------------
  `lambda_`    | `1`                     | Number of children to produce at each generation 
-------------- | ----------------------- | ------------------------------------------------
  `d`          | `1.0 + N / 2.0`         | Damping for step-size.    
-------------- | ----------------------- | ------------------------------------------------
  `ptarg`      | `1.0 / (5 + 1.0 / 2.0)` | Target success rate.      
-------------- | ----------------------- | ------------------------------------------------
  `cp`         | `ptarg / (2.0 + ptarg)` | Step size learning rate.  
-------------- | ----------------------- | ------------------------------------------------
  `cc`         | `2.0 / (N + 2.0)`       | Cumulation time horizon.  
-------------- | ----------------------- | ------------------------------------------------
- `ccov`       | `2.0 / (N**2 + 6.0)`    | Covariance matrix learning
-              |                         | rate.                     
-------------- | ----------------------- | ------------------------------------------------
+ `ccov`       | `2.0 / (N**2 + 6.0)`    | Covariance matrix learning rate.                     
  `pthresh`    | `0.44`                  | Threshold success rate.   
-------------- | ----------------------- | ------------------------------------------------
 
 
 Ref. `Hansen and Ostermeier, 2001. Completely Derandomized Self-Adaptation in Evolution Strategies. Evolutionary Computation`
