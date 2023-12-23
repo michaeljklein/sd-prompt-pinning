@@ -31,8 +31,6 @@ in the script file as it's non-essential.)
     - Unimplemented (at time of writing):
         - Target images that ignore an image mask, e.g. fix parts of an image for animation, solely using the prompt!
         - CLIP-based analysis to allow pinning a result to a particular (set of) goal tag(s)
-          + Will need to add the following to `metadata.ini`
-          + `Requires = stable-diffusion-webui-tokenizer`
 
 
 ## Solution
