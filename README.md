@@ -12,7 +12,7 @@ based on:
 ## Dependencies
 
 This extension depends on
-[https://github.com/picobyte/stable-diffusion-webui-wd14-tagger](picobyte/stable-diffusion-webui-wd14-tagger)
+[picobyte/stable-diffusion-webui-wd14-tagger](https://github.com/picobyte/stable-diffusion-webui-wd14-tagger)
 for image tagging, but it could possibly be made into an optional dependency.
 (If it's an issue for your use case, I expect it to be straightforward to disable
 in the script file as it's non-essential.)
