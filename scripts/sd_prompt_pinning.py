@@ -225,8 +225,8 @@ def apply_hyperbatch_weights(
                 final_loss += np.power(sub_step_loss, weight_scale / hyperbatch_k)
         case 'Exponential':
             for hyperbatch_k, sub_step_loss in sub_step_losses:
-                # 'X * hyperbatch_weight_scale ^ K'
-                final_loss += sub_step_loss * np.power(weight_scale, hyperbatch_k)
+                # 'X * (0.5 + hyperbatch_weight_scale) ^ K'
+                final_loss += sub_step_loss * np.power(0.5 + weight_scale, hyperbatch_k)
         case 'Polynomial':
             for hyperbatch_k, sub_step_loss in sub_step_losses:
                 # '(1 + X)^(hyperbatch_weight_scale * K)'
@@ -930,7 +930,7 @@ class PromptPinFiles:
 
 
 
-# # only implemented for waifu diffusion
+# # only implemented for a single model
 # large_batch_interrogate(self, images: List, dry_run=False)
 
 
@@ -1111,7 +1111,7 @@ class PromptPinningScript(scripts.Script):
 
                 hyperbatch_weights_enabled = gr.Checkbox(
                     True,
-                    label="Hyperbatch Weights Enabled (for Hyperbatch samplers only)"
+                    label="Hyperbatch Weights Enabled (for Hyperbatch samplers)"
                 )
 
                 hyperbatch_weights_force_allowed = gr.Checkbox(

@@ -52,29 +52,33 @@ CMA (covariant matrix adaptation) is an efficient automatic evolutionary optimiz
 
 ### Options
 
-Parameter	                   | Default	                                               | Details
----------------------        | ------------------------------------------------------- | -----------------------------------------------------------------------------------------------------------------
-Target Images                | `None`                                                  | Use the provided image(s) as a target instead of the first generated batch
-CMA Logging                  | `True`                                                  | Log CMA info to CLI (stdout)
-CMA Seed                     | `[calculated from seed, subseed]`                       | Numpy seed, used for CMA sampling
-Number of generations        | `int(16 * floor(log(N)))`                               | Number of generations
-Initial population STD       | `0.05`                                                  | CMA initial population STD
-Initial population radius    | `0.25`                                                  | Radius of uniform distribution for CMA initial population
-Multi-objective size limiter | `0`                                                     | Disabled when `0`. Apply a penalty using a multi-objective CMA when more than this distance from original prompt
-Size limit error             | `[size limiter] / 100`                                  | Error for multi-objective size limiter: vectors within this distance are "close"
-Size limit weight            | `[size limiter] * 10`                                   | Weight for multi-objective size limiter penalty
-`lambda_`                    | `int(4 + 3 * log(N))`                                   | Number of children to produce at each generation, `N` is the individual's size (integer).
-`mu`                         | `int(lambda_ / 2)`                                      | The number of parents to keep from the lambda children (integer).
-`cmatrix`                    | `identity(N)`                                           | The initial covariance matrix of the distribution that will be sampled.
-`weights`                    | `"superlinear"`                                         | Decrease speed, can be `"superlinear"`, `"linear"` or `"equal"`.
-`cs`                         | `(mueff + 2) / (N + mueff + 3)`                         | Cumulation constant for step-size.
-`damps`                      | `1 + 2 * max(0, sqrt((mueff - 1) / (N + 1)) - 1) + cs`  | Damping for step-size.
-`ccum`                       | `4 / (N + 4)`                                           | Cumulation constant for covariance matrix.
-`ccov1`                      | `2 / ((N + 1.3)^2 + mueff)`                             | Learning rate for rank-one update.
-`ccovmu`                     | `2 * (mueff - 2 + 1 / mueff) / ((N + 2)^2 + mueff)`     | Learning rate for rank-mu update.
+Parameter	                         | Default	                                               | Details
+---------------------------------- | ------------------------------------------------------- | -----------------------------------------------------------------------------------------------------------------
+Target Images                      | `None`                                                  | Use the provided image(s) as a target instead of the first generated batch
+CMA Logging                        | `True`                                                  | Log CMA info to CLI (stdout)
+CMA Seed                           | `[calculated from seed, subseed]`                       | Numpy seed, used for CMA sampling
+Number of generations              | `int(16 * floor(log(N)))`                               | Number of generations
+Initial population STD             | `0.05`                                                  | CMA initial population STD
+Initial population radius          | `0.25`                                                  | Radius of uniform distribution for CMA initial population
+Multi-objective size limiter       | `0`                                                     | Disabled when `0`. Apply a penalty using a multi-objective CMA when more than this distance from original prompt
+Size limit error                   | `[size limiter] / 100`                                  | Error for multi-objective size limiter: vectors within this distance are "close"
+Size limit weight                  | `[size limiter] * 10`                                   | Weight for multi-objective size limiter penalty
+`lambda_`                          | `int(4 + 3 * log(N))`                                   | Number of children to produce at each generation, `N` is the individual's size (integer).
+`mu`                               | `int(lambda_ / 2)`                                      | The number of parents to keep from the lambda children (integer).
+`cmatrix`                          | `identity(N)`                                           | The initial covariance matrix of the distribution that will be sampled.
+`weights`                          | `"superlinear"`                                         | Decrease speed, can be `"superlinear"`, `"linear"` or `"equal"`.
+`cs`                               | `(mueff + 2) / (N + mueff + 3)`                         | Cumulation constant for step-size.
+`damps`                            | `1 + 2 * max(0, sqrt((mueff - 1) / (N + 1)) - 1) + cs`  | Damping for step-size.
+`ccum`                             | `4 / (N + 4)`                                           | Cumulation constant for covariance matrix.
+`ccov1`                            | `2 / ((N + 1.3)^2 + mueff)`                             | Learning rate for rank-one update.
+`ccovmu`                           | `2 * (mueff - 2 + 1 / mueff) / ((N + 2)^2 + mueff)`     | Learning rate for rank-mu update.
+`Hyperbatch Weights Enabled`       | `True`                                                  | Enable 'Hyperbatch' weights
+`Hyperbatch Weights Force Allowed` | `True`                                                  | Allow enabling 'Hyperbatch' weights when not using a 'Hyperbatch' sampler
+`Hyperbatch Weight Type`           | `Geometric`                                             | Type of weights used for 'Hyperbatches'. See the Hyperbatch section for more detail.
+`Hyperbatch Weight Scale`          | `1.0`                                                   | Weight scaling factor for 'Hyperbatches'. See the Hyperbatch section for more detail.
 
 NOTE: Some parameters may not work when multi-objective size limiting is enabled.
-The allowed parameters when multi-objective optimization are as follows:
+The utilized CMA parameters for multi-objective optimization are as follows:
 (Some options may not yet be available in the UI.)
 
  Parameter    | Default                 | Details                   
@@ -154,7 +158,7 @@ If the `Hyperbatch Weights` option is enabled, the following options for
   + Default weights
   + `X ^ (hyperbatch_weight_scale / K)`
 - `Exponential`
-  + `X * hyperbatch_weight_scale ^ K`
+  + `X * (0.5 + hyperbatch_weight_scale) ^ K`
 - `Polynomial`
   + `(1 + X)^(hyperbatch_weight_scale * K)`
 
@@ -174,19 +178,20 @@ Assuming `txt2img` (it works similarly for `img2img`):
 - `outputs/txt2img-images/prompt_pins/00prompt_pin_number/00generation_number/ijdwfemknbidwjo../loss_plot.png`: PNG plot of visual errors
 - `outputs/txt2img-images/prompt_pins/00prompt_pin_number/00generation_number/ijdwfemknbidwjo../summary.gif`: GIF of all images from the individual
 
+
 ### Techniques
 
 The simplest technique that I've found to be effective is to:
-1. Experiment with a prompt and its batch size to capture the amount of variation you want
+1. Experiment with a prompt and its batch size to capture the amount of variation you want.
   - For example, if you want to pin down a character pose, find a batch size
     that's large enough to have several results that appear "close" to your goal.
   - Alternatively, pick a sufficiently large batch size to reliably contain
     examples you want to avoid and use the result to identify which parts of the
     prompt are resulting in those effects.
-2. Pick a seed and use one of the results from that batch as the target image
-3. Set the initial population STD and centroid radius fairly small (`< 0.1`)
-4. Multi-objective size limiter also fairly small, but at least `<= 1` to ensure
-   the prompts stay relatively close to the original
+2. Pick a seed and use one of the results from that batch as the target image.
+3. Set the initial population STD and centroid radius fairly small (`< 0.1`).
+4. Set the multi-objective size limiter also fairly small, but at least `<= 1`
+   to ensure the prompts stay relatively close to the original.
 
 If no target image is used:
 
