@@ -11,11 +11,9 @@ based on:
 
 ## Dependencies
 
-This extension depends on
+This extension optionally depends on
 [picobyte/stable-diffusion-webui-wd14-tagger](https://github.com/picobyte/stable-diffusion-webui-wd14-tagger)
-for image tagging, but it could possibly be made into an optional dependency.
-(If it's an issue for your use case, I expect it to be straightforward to disable
-in the script file as it's non-essential.)
+for image tagging. (In progress: it may make more sense to use a different extension.)
 
 
 ## Problem
@@ -102,7 +100,10 @@ the default was picked from the following observances:
 
 ### Hyperbatches (in progress.. 🚧)
 
-Hyperbatches are an experimental feature that currently require a fork of the AUTOMATIC1111 Web UI for additional samplers.
+Hyperbatches are an experimental feature that currently require a
+[fork of AUTOMATIC1111 Web UI](https://github.com/michaeljklein/stable-diffusion-webui/tree/michaeljklein/hyperbatch-samplers)
+for additional samplers.
+
 The following samplers have been implemented in the fork:
 - `DPM++ 2M Karras - Hyperbatch`
 - `DPM++ SDE Karras - Hyperbatch`

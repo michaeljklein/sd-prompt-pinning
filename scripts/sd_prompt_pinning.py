@@ -93,13 +93,15 @@ sys.path.append(flip_pytorch_path)
 from flip_loss_patched import color_space_transform, feature_detection, generate_spatial_filter, hunt_adjustment, hyab, redistribute_errors, spatial_filter # LDRFLIPLoss,
 sys.path.remove(flip_pytorch_path)
 
-# stable-diffusion-webui-wd14-tagger
-extension_directory = os.path.dirname(this_extension_directory)
-tagger_path = os.path.join(extension_directory, 'stable-diffusion-webui-wd14-tagger')
-sys.path.append(tagger_path)
-from tagger import interrogator as tagger_interrogator
-from tagger import utils as tagger_utils
-sys.path.remove(tagger_path)
+# # TODO: ScriptWithDependencies class? The metadata.ini doesn't force the dependency.
+# # stable-diffusion-webui-wd14-tagger
+# extension_directory = os.path.dirname(this_extension_directory)
+# tagger_path = os.path.join(extension_directory, 'stable-diffusion-webui-wd14-tagger')
+# if os.path.exists(tagger_path):
+#     sys.path.append(tagger_path)
+#     from tagger import interrogator as tagger_interrogator
+#     from tagger import utils as tagger_utils
+#     sys.path.remove(tagger_path)
 
 ####################################################################################
 # END IMPORTS
