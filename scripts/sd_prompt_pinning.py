@@ -106,6 +106,142 @@ sys.path.remove(tagger_path)
 ####################################################################################
 
 
+############################################################################################################
+# BEGIN Hyperbatch
+############################################################################################################
+
+# Get the traces of which images were copied from which, for "hyperbatches."
+# 
+# A "Hyperbatch" sampler starts with one image/seed and doubles (up to batch size)
+# all in-progress images regularly during sampling.
+#
+# For example, given `batch_size=7` and `num_steps=20`:
+#
+# ```
+# print(get_hyberbatch_traces(7, 20))
+# [[0, 0, 0, 0], [1, 1, 1, 0], [2, 2, 0, 0], [3, 3, 1, 0], [4, 0, 0, 0], [5, 1, 1, 0], [6, 2, 0, 0]]
+# 
+# [0, 0, 0, 0]
+#  ^  ^  ^  ^
+#  |  |  |  0th image, batch size 2^0
+#  |  |  0th image, batch size 2^1
+#  |  0th image, batch size 2^2
+#  0th image, batch size 2^3
+#
+# [1, 1, 1, 0]
+#  ^  ^  ^  ^
+#  |  |  |  0th image, batch size 2^0
+#  |  |  1st image, batch size 2^1
+#  |  1st image, batch size 2^2
+#  1st image, batch size 2^3
+# ```
+def get_hyberbatch_traces(batch_size: int, num_steps: int):
+    trace_list = [[0]]
+    current_batch_size = 1
+    current_batch_size_log2 = 0
+    batch_size_log2 = batch_size.bit_length()
+    batch_size_leftover = 0
+    if 2 ** batch_size_log2 != batch_size:
+        batch_size_log2 -= 1
+        batch_size_leftover = batch_size - 2 ** batch_size_log2
+
+    # number of steps between doubling
+    num_sub_steps = batch_size_log2 + 1
+    sub_step_size = num_steps // num_sub_steps
+    if num_steps % num_sub_steps:
+        sub_step_final = sub_step_size * num_sub_steps
+    else:
+        sub_step_final = sub_step_size * batch_size_log2
+
+    for i in range(num_steps - 1):
+        if i != 0 and i % sub_step_size == 0:
+            if i == sub_step_final:
+                appended_size = batch_size_leftover
+            else:
+                appended_size = None
+
+            current_batch_size_log2 += 1
+            trace_list = list(map(lambda i_trace: [i_trace[0]] + i_trace[1], enumerate(trace_list + trace_list[0:appended_size])))
+            if appended_size is None:
+                current_batch_size = 2 * current_batch_size
+            else:
+                current_batch_size = current_batch_size + appended_size
+
+    assert len(trace_list) == batch_size
+    return trace_list
+
+# values: list[A]
+# original_metric: tuple[A, A] -> float
+def apply_hyperbatch_weights(
+        batch_size: int,
+        num_steps: int,
+        weight_type: str,
+        weight_scale: float,
+        values,
+        original_pair_metric, # loss_fn_NEW: tuple[A, A] -> float
+        original_summary_metric): # np.mean(loss_list) + np.abs(np.std(loss_list))
+
+    def traced_metric(traced_values):
+        traced_x, traced_y = traced_values
+        trace_list_x, x = traced_x
+        trace_list_y, y = traced_y
+        return (trace_list_x, trace_list_y, original_pair_metric((x, y)))
+
+    trace_list = get_hyberbatch_traces(batch_size, num_steps)
+    traced_values = list(zip(trace_list, values))
+    traced_values_len = len(traced_values)
+    expected_total = (traced_values_len * (traced_values_len - 1)) / 2
+    loss_list = list(tqdm.contrib.tmap(traced_metric, itertools.combinations(traced_values, 2), total=expected_total))
+
+    # sub_step in range(len(trace_list[0]))
+    # index in range(batch_size)
+    def get_sub_step_loss(sub_step: int):
+        result_dict: dict[int, list[float]] = {}
+        for trace_list_x, trace_list_y, loss in loss_list:
+            trace_key_x = trace_list_x[sub_step]
+            trace_key_y = trace_list_y[sub_step]
+            if trace_key_x in result_dict:
+                result_dict[trace_key_x].append(loss)
+            else:
+                result_dict[trace_key_x] = [loss]
+
+            if trace_key_y in result_dict:
+                result_dict[trace_key_y].append(loss)
+            else:
+                result_dict[trace_key_y] = [loss]
+
+        hyperbatch_k = sub_step + 1
+        return (hyperbatch_k, np.mean(list(map(original_summary_metric, result_dict.values()))))
+
+    num_sub_steps = len(trace_list[0])
+    sub_step_losses = map(get_sub_step_loss, range(num_sub_steps))
+    final_loss = 0.0
+    match weight_type:
+        case 'Geometric':
+            for hyperbatch_k, sub_step_loss in sub_step_losses:
+                # 'X ^ (hyperbatch_weight_scale / K)'
+                final_loss += np.power(sub_step_loss, weight_scale / hyperbatch_k)
+        case 'Exponential':
+            for hyperbatch_k, sub_step_loss in sub_step_losses:
+                # 'X * hyperbatch_weight_scale ^ K'
+                final_loss += sub_step_loss * np.power(weight_scale, hyperbatch_k)
+        case 'Polynomial':
+            for hyperbatch_k, sub_step_loss in sub_step_losses:
+                # '(1 + X)^(hyperbatch_weight_scale * K)'
+                final_loss += np.power(1 + sub_step_loss, weight_scale * hyperbatch_k)
+        case _:
+            raise ValueError(f"apply_hyperbatch_weights: unknown hyperbatch_weight_type {weight_type}")
+
+    raw_loss_list = list(map(lambda traced_losses: traced_losses[-1], loss_list))
+    return final_loss, raw_loss_list
+
+
+
+############################################################################################################
+# END Hyperbatch
+############################################################################################################
+
+
 ####################################################################################
 # BEGIN FLIP LDRFlipLoss PATCHED (low-level image difference)
 ####################################################################################
@@ -288,7 +424,15 @@ def pil_image_ldrflip_loss(cuda_enabled: bool, ldrflip_loss_fn, img_reference: I
 #   have the expected width and height
 #
 # NOTE: std is used because the sqrt amplifies the variance for values < 1.
-def pil_images_custom_ldrflip_loss(image_list: Iterator[Image], expected_width: int, expected_height: int) -> tuple[float, list[float], float]:
+def pil_images_custom_ldrflip_loss(
+        image_list: Iterator[Image],
+        expected_width: int,
+        expected_height: int,
+        batch_size: int,
+        num_steps: int,
+        hyperbatch_weights_enabled: bool,
+        hyperbatch_weight_type: str,
+        hyperbatch_weight_scale: float) -> tuple[float, list[float], float]:
     cuda_enabled = torch.cuda.is_available()
 
     # TODO: DEBUG
@@ -329,22 +473,34 @@ def pil_images_custom_ldrflip_loss(image_list: Iterator[Image], expected_width: 
 
     new_loss_list_start_time = time.time()
     preprocessed_filtered_image_list = tqdm.contrib.tmap(lambda x: ldrflip_loss_fn_NEW.preprocess_ldrflip(x), filtered_image_list)
-    new_loss_list = list(tqdm.contrib.tmap(loss_fn_NEW, itertools.combinations(preprocessed_filtered_image_list, 2), total=expected_total))
+    if hyperbatch_weights_enabled:
+        final_loss, new_loss_list = apply_hyperbatch_weights(
+            batch_size,
+            num_steps,
+            hyperbatch_weight_type,
+            hyperbatch_weight_scale,
+            list(preprocessed_filtered_image_list),
+            loss_fn_NEW,
+            lambda x: np.mean(x) + np.abs(np.std(x)))
+    else:
+        new_loss_list = list(tqdm.contrib.tmap(loss_fn_NEW, itertools.combinations(preprocessed_filtered_image_list, 2), total=expected_total))
+        # # on len(combinations) == 120
+        # # new_loss_list_time
+        # # 7.4162468910217285
+        # print('new_loss_list_time')
+        # print(new_loss_list_time)
+    
+        # TODO: DEBUG
+        # print(loss_list)
+        # print(new_loss_list)
+        # assert loss_list == new_loss_list, "loss lists aren't equal"
+    
+        # TODO fix metric (multi metric/goal?)
+        # return (np.mean(loss_list) + np.abs(np.std(loss_list)), loss_list)
+        final_loss = np.mean(new_loss_list) + np.abs(np.std(new_loss_list))
+
     flip_execution_seconds = time.time() - new_loss_list_start_time
-    # # on len(combinations) == 120
-    # # new_loss_list_time
-    # # 7.4162468910217285
-    # print('new_loss_list_time')
-    # print(new_loss_list_time)
-
-    # TODO: DEBUG
-    # print(loss_list)
-    # print(new_loss_list)
-    # assert loss_list == new_loss_list, "loss lists aren't equal"
-
-    # TODO fix metric (multi metric/goal?)
-    # return (np.mean(loss_list) + np.abs(np.std(loss_list)), loss_list)
-    return (np.mean(new_loss_list) + np.abs(np.std(new_loss_list)), new_loss_list, flip_execution_seconds)
+    return (final_loss, new_loss_list, flip_execution_seconds)
 
 
 ####################################################################################
@@ -703,6 +859,7 @@ class PromptPinFiles:
 # END DETERMINISTIC-ENOUGH SAVING
 ############################################################################################################
 
+
 ############################################################################################################
 # BEGIN wd14-tagger
 ############################################################################################################
@@ -955,6 +1112,11 @@ class PromptPinningScript(scripts.Script):
                     label="Hyperbatch Weights Enabled (for Hyperbatch samplers only)"
                 )
 
+                hyperbatch_weights_force_allowed = gr.Checkbox(
+                    False,
+                    label="Hyperbatch Weights Allowed for Non-Hyperbatch Samplers (likely to fail!)"
+                )
+
                 hyperbatch_weight_type = gr.Dropdown(
                     ["Geometric", "Exponential", "Polynomial"],
                     label="Hyperbatch Weight Type",
@@ -989,6 +1151,7 @@ class PromptPinningScript(scripts.Script):
                 cma_ccov1,
                 cma_ccovmu,
                 hyperbatch_weights_enabled,
+                hyperbatch_weights_force_allowed,
                 hyperbatch_weight_type,
                 hyperbatch_weight_scale]
 
@@ -1017,7 +1180,12 @@ class PromptPinningScript(scripts.Script):
         # # (best :1.0)(quality :1.0)(, :1.0)(capital :1.0)(letter :1.0)(t :1.0)(, :1.0)(written :1.0)(, :1.0)(ink :1.0)(, :1.0)(inscribed :1.0)(, :1.0)(signature :1.0)(, :1.0)(artistic :1.0)
         # print()
 
-        neg_token_attention, neg_token_attention_text = to_token_attention(processing_instance.negative_prompt)
+        try:
+            neg_token_attention, neg_token_attention_text = to_token_attention(processing_instance.negative_prompt)
+        except ValueError:
+            neg_token_attention = []
+            neg_token_attention_text = []
+
         # print('negative_prompt')
         # print(processing_instance.negative_prompt)
         # # engraving, bold, italic, messy, scattered, blot
@@ -1032,7 +1200,12 @@ class PromptPinningScript(scripts.Script):
         # print()
 
         token_attention_words, token_attention_fragments = list(zip(*token_attention)) # unzip
-        neg_token_attention_words, neg_token_attention_fragments = list(zip(*neg_token_attention)) # unzip
+        try:
+            neg_token_attention_words, neg_token_attention_fragments = list(zip(*neg_token_attention)) # unzip
+        except ValueError:
+            neg_token_attention_words = []
+            neg_token_attention_fragments = []
+
         len_token_attention = len(token_attention)
         len_neg_token_attention = len(neg_token_attention)
         N = len_token_attention + len_neg_token_attention
@@ -1045,7 +1218,7 @@ class PromptPinningScript(scripts.Script):
         cma_initial_population_centroid_radius, cma_initial_population_std, *rest_args = rest_args
         cma_limited_size, cma_limited_size_eps, cma_limited_size_weight, *rest_args = rest_args
         cma_lambda, cma_mu, cma_weights, cma_cs, cma_damps, cma_ccum, *rest_args = rest_args
-        cma_ccov1, cma_ccovmu, hyperbatch_weights_enabled, hyperbatch_weight_type, hyperbatch_weight_scale = rest_args
+        cma_ccov1, cma_ccovmu, hyperbatch_weights_enabled, hyperbatch_weights_force_allowed, hyperbatch_weight_type, hyperbatch_weight_scale = rest_args
 
         # convert -1 to a random number or None to cma_seed_value
         def possible_seed_to_seed(possible_seed):
@@ -1146,6 +1319,12 @@ class PromptPinningScript(scripts.Script):
             cma_ccovmu = float(cma_ccovmu)
             strategy_kwargs['ccovmu'] = float(cma_ccovmu)
 
+        if hyperbatch_weights_enabled:
+            if 'Hyperbatch' in processing_instance.sampler_name or hyperbatch_weights_force_allowed:
+                pass
+            else:
+                raise ValueError("Hyperbatch weights are only available when using a 'Hyperbatch' sampler or 'Hyperbatch Weights Allowed for Non-Hyperbatch Samplers'")
+
         if missing_arg(hyperbatch_weight_scale):
             hyperbatch_weight_scale = 1.2
         else:
@@ -1219,7 +1398,16 @@ class PromptPinningScript(scripts.Script):
             # print('current_images')
             # print(current_images)
 
-            calculated_loss, calculated_loss_list, flip_execution_seconds = pil_images_custom_ldrflip_loss(itertools.chain(target_images, current_images), processing_instance.width, processing_instance.height)
+            calculated_loss, calculated_loss_list, flip_execution_seconds = pil_images_custom_ldrflip_loss(
+                    itertools.chain(target_images, current_images),
+                    processing_instance.width,
+                    processing_instance.height,
+                    processing_instance.batch_size,
+                    processing_instance.steps,
+                    hyperbatch_weights_enabled,
+                    hyperbatch_weight_type,
+                    hyperbatch_weight_scale)
+
             # TODO: debug
             # print('calculated_loss')
             # print(calculated_loss)
@@ -1326,10 +1514,10 @@ class PromptPinningScript(scripts.Script):
 
 
         # # TODO: cleanup if warning goes away (has already been created..)
-        # if 'deap_creator.FitnessMin' in globals():
-        del deap_creator.FitnessMin
-        # if 'deap_creator.Individual' in globals():
-        del deap_creator.Individual
+        if 'deap_creator.FitnessMin' in globals():
+            del deap_creator.FitnessMin
+        if 'deap_creator.Individual' in globals():
+            del deap_creator.Individual
 
         # we want to minimize the derived FLIP metric(s)
         deap_creator.create("FitnessMin", deap_base.Fitness, weights=(-1.0,))
@@ -1555,7 +1743,7 @@ class PromptPinningScript(scripts.Script):
         # multi objective plot
         if cma_limited_size != 0:
             fig = plt.figure()
-            plt.title("Multi-objective minimization via MO-CMA-ES")
+            plt.title("Multi-objective minimization via MO-CMA-ES (this plot is experimental)") # TODO test plot
             plt.xlabel("First objective (function) to minimize")
             plt.ylabel("Second objective (function) to minimize")
 
