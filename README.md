@@ -39,14 +39,15 @@ CMA (covariant matrix adaptation) is an efficient automatic evolutionary optimiz
 - It’s fit for problems where the input is a matrix and the metric is smooth.
 - In practice, it converges exponentially.
 - Downside(s):
-    - Difficult to specify “small” distance from original prompt, so may need to use euclidean distance or similar.
-        - This means that certain tokens could get “washed out” with larger allowed distances.
-    - A sufficiently-large sample is required _per attempt_.
-      For many cases, `8-16` images are likely sufficient, but assuming efficiency of “perfect” binary search,
-      it will require around `3*num_tokens` steps to converge, or `3*num_tokens*batch_size` images.
-        - By the way, binary search is about as efficient as stable diffusion:
-          a few manual experiments showed that `2^steps` is approximately `bits_of_output`
-          for "good" convergence, at least with `DPM++ SDE Karras`.
+  + Because it's difficult to specify “small” distance from original prompt,
+    the current approach is to limit the `L2`-norm from the original weights.
+    * This means that certain tokens could get “washed out” with larger allowed distances.
+  + A sufficiently-large sample is required _per attempt_.
+    For many cases, `8-16` images are likely sufficient, but assuming efficiency of “perfect” binary search,
+    it will require around `3*num_tokens` steps to converge, or `3*num_tokens*batch_size` images.
+    * By the way, binary search is about as efficient as Stable Diffusion:
+      a few manual experiments showed that `2^steps` is approximately `bits_of_output`
+      for "good" convergence, at least with `DPM++ SDE Karras`.
 
 
 ## Guide
@@ -99,6 +100,64 @@ the default was picked from the following observances:
   and by eyeballing other examples, the multiplicative overhead is approximately `16` (when the algorithm is efficient)
 
 
+### Hyperbatches (in progress.. 🚧)
+
+Hyperbatches are an experimental feature that currently require a fork of the AUTOMATIC1111 Web UI for additional samplers.
+The following samplers have been implemented in the fork:
+- `DPM++ 2M Karras - Hyperbatch`
+- `DPM++ SDE Karras - Hyperbatch`
+- `DPM++ SDE - Hyperbatch`
+
+
+Why?
+- These samplers can be several times faster than their non-hyperbatch
+  equivalents, dependent on the batch size and step count used. See the plot
+  below for more details.
+- These samplers are specifically designed to:
+  + Expose more of the generation (in)stability to the evolutionary algorithm's
+    metric
+  + Take advantage of GPU's with `>= 8 GB` of RAM
+    * E.g. a `g4dn.xlarge` has `16 GiB` of VRAM and can generate `71 512x512`
+      images in a single batch
+    * However, generating larger batches provides an unpredictable amount of
+      certainty when calculating e.g. the ꟻLIP loss
+
+This is acheived by modifying
+[k-diffusion](https://github.com/crowsonkb/k-diffusion) samplers as follows:
+1. Start with a single image
+2. Perform several sampling steps
+3. Double the batch size and assign different seeds to the copies
+4. Repeat from step (2) until the `Batch size` set in the UI is reached
+
+
+NOTE: The estimates below assume that `8 images` take exactly `8 x` as long as
+one image. This isn't quite true, so some of the benefit is reduced for batch
+sizes smaller than `8`. However, this potentially provides a larger benefit for
+"very-large" batches (i.e. `>= 64`) than is lost from having `Batch size > 8`.
+
+![Efficiency plots](./hyperbatch_efficiency_plots.png)
+
+See [`HyperbatchEfficiencyPlots.ipynb`](./HyperbatchEfficiencyPlots.ipynb)
+for the plot-generation code.
+
+
+#### Hyperbatch Options
+
+In this section, `K` is the distance from the root of the binary tree,
+starting from `1`. E.g. the root of the tree has `K=1`, its leaves have `K=2`,
+their leaves `K=3`, etc.
+
+If the `Hyperbatch Weights` option is enabled, the following options for
+`Hyperbatch Weight Type` become available:
+- `Geometric`
+  + Default weights
+  + `X ^ (hyperbatch_weight_scale / K)`
+- `Exponential`
+  + `X * hyperbatch_weight_scale ^ K`
+- `Polynomial`
+  + `(1 + X)^(hyperbatch_weight_scale * K)`
+
+
 ### Outputs
 
 Assuming `txt2img` (it works similarly for `img2img`):
@@ -115,6 +174,18 @@ Assuming `txt2img` (it works similarly for `img2img`):
 - `outputs/txt2img-images/prompt_pins/00prompt_pin_number/00generation_number/ijdwfemknbidwjo../summary.gif`: GIF of all images from the individual
 
 ### Techniques
+
+The simplest technique that I've found to be effective is to:
+1. Experiment with a prompt and its batch size to capture the amount of variation you want
+  - For example, if you want to pin down a character pose, find a batch size
+    that's large enough to have several results that appear "close" to your goal.
+  - Alternatively, pick a sufficiently large batch size to reliably contain
+    examples you want to avoid and use the result to identify which parts of the
+    prompt are resulting in those effects.
+2. Pick a seed and use one of the results from that batch as the target image
+3. Set the initial population STD and centroid radius fairly small (`< 0.1`)
+4. Multi-objective size limiter also fairly small, but at least `<= 1` to ensure
+   the prompts stay relatively close to the original
 
 If no target image is used:
 
@@ -143,17 +214,27 @@ Likewise, if visually-distinct target images are used, the algorithm is
 effectively finding the "visual average," which is likely to be blurry,
 distorted, or otherwise indistinct.
 
+
 #### Debugging
 
 - Upper right graph of `cma_plot.png` shows divergence
   + It's likely that it's not sampling "wide" enough, or is way too wide:
     * If way too wide, try lowering the initial population radius and STD
     * If not wide enough, try increasing the CFG scale, batch size, or `lambda_`
+- Targeting a large batch results in blurry or "wallpaper"-type patterns
+  + This is expected when using ꟻLIP to target many images: you're calculating a
+    sort of "visual average" of all of the images.
+  + By "visual average," I mean that it's an image that's approximately visually
+    equidistant to an ensemble of images, according to the ꟻLIP loss function.
 
 
 ## Test runs (in progress.. 🚧)
 
+[Demo page](https://michaeljklein.github.io/sd-prompt-pinning-test-cases)
+
 [sd-prompt-pinning-test-cases](https://github.com/michaeljklein/sd-prompt-pinning-test-cases)
+(GitHub repo)
+
 
 ## References
 
@@ -162,4 +243,6 @@ distorted, or otherwise indistinct.
     Marc Parizeau and Christian Gagné, "DEAP: Evolutionary Algorithms Made Easy",
     Journal of Machine Learning Research, vol. 13, pp. 2171-2175, jul 2012.
 - [LDR ꟻLIP](https://research.nvidia.com/publication/2020-07_FLIP)
+- [k-diffusion](https://github.com/crowsonkb/k-diffusion)
+  + [Elucidating the Design Space of Diffusion-Based Generative Models (Karras et al., 2022)](https://arxiv.org/abs/2206.00364)
 

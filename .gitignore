@@ -1,5 +1,6 @@
 sd-prompt-pinning-test-cases/
 *.png
+!hyperbatch_efficiency_plots.png
 .DS_Store
 
 flip/

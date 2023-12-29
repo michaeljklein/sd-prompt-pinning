@@ -794,9 +794,9 @@ class PromptPinningScript(scripts.Script):
         return "Prompt pinning"
 
     def show(self, is_img2img):
-        return True
-        # TODO: DEBUG
+        # # TODO: DEBUG
         # return scripts.AlwaysVisible
+        return True
 
     # Setup menu ui detail
     def ui(self, is_img2img):
@@ -950,6 +950,26 @@ class PromptPinningScript(scripts.Script):
                     info='Learning rate for rank-mu update.'
                 )
 
+                hyperbatch_weights_enabled = gr.Checkbox(
+                    True,
+                    label="Hyperbatch Weights Enabled (for Hyperbatch samplers only)"
+                )
+
+                hyperbatch_weight_type = gr.Dropdown(
+                    ["Geometric", "Exponential", "Polynomial"],
+                    label="Hyperbatch Weight Type",
+                    value="Geometric"
+                )
+
+                hyperbatch_weight_scale = gr.Slider(
+                    label="Hyperbatch weight scale",
+                    info='See README for more info: varies with Hyperbatch Weight Type',
+                    minimum=0,
+                    maximum=10,
+                    step=0.01,
+                    value=1
+                )
+
         return [top_level_desc,
                 cma_cli_log,
                 user_target_images,
@@ -967,7 +987,10 @@ class PromptPinningScript(scripts.Script):
                 cma_damps,
                 cma_ccum,
                 cma_ccov1,
-                cma_ccovmu]
+                cma_ccovmu,
+                hyperbatch_weights_enabled,
+                hyperbatch_weight_type,
+                hyperbatch_weight_scale]
 
 
     # Extension main process
@@ -1022,7 +1045,7 @@ class PromptPinningScript(scripts.Script):
         cma_initial_population_centroid_radius, cma_initial_population_std, *rest_args = rest_args
         cma_limited_size, cma_limited_size_eps, cma_limited_size_weight, *rest_args = rest_args
         cma_lambda, cma_mu, cma_weights, cma_cs, cma_damps, cma_ccum, *rest_args = rest_args
-        cma_ccov1, cma_ccovmu = rest_args
+        cma_ccov1, cma_ccovmu, hyperbatch_weights_enabled, hyperbatch_weight_type, hyperbatch_weight_scale = rest_args
 
         # convert -1 to a random number or None to cma_seed_value
         def possible_seed_to_seed(possible_seed):
@@ -1122,6 +1145,11 @@ class PromptPinningScript(scripts.Script):
         else:
             cma_ccovmu = float(cma_ccovmu)
             strategy_kwargs['ccovmu'] = float(cma_ccovmu)
+
+        if missing_arg(hyperbatch_weight_scale):
+            hyperbatch_weight_scale = 1.2
+        else:
+            hyperbatch_weight_scale = float(hyperbatch_weight_scale)
 
         # set whole-run total number of iterations
         total_steps = processing_instance.steps * number_of_generations * children_per_gen
