@@ -112,6 +112,73 @@ sys.path.remove(flip_pytorch_path)
 # BEGIN Hyperbatch
 ############################################################################################################
 
+def batch_doubling_schedule_validate_and_final_size(schedule):
+    current_index = 0
+    current_size = 1
+    for expected_current_size, appended_size, i in schedule:
+        assert current_index == i, f"current_index has unexpected value: {current_index} != {i}"
+        current_index += 1
+        if appended_size is None:
+            current_size *= 2
+        else:
+            current_size += appended_size
+        assert expected_current_size == current_size, f"expected_current_size != current_size: {expected_current_size} != {current_size}"
+
+    return current_size
+
+# The doubling pattern has shape:
+#
+# d steps, 2x, d steps, 2x, .., 2x, d steps, leftover/2x, d steps
+#
+# K 2x’s/leftovers
+# K*d + d = (K+1)*d = steps
+# steps/(K + 1) = d
+# zs = [0] * d
+#
+# If leftovers
+#   (zs + [None]) * (K-1) + zs + leftovers + zs
+# Else
+#   (zs + [None]) * K + zs
+#
+# Note: this function asserts that the schedule:
+# - is an Iterator[tuple[current_size, appended_size | None, int]]
+# - list(map(lambda x: x[-1], schedule)) == list(range(num_steps))
+# - map(lambda x: x[1], output) == range(num_steps)
+# - the batch_size's increase as expected
+def batch_doubling_schedule(batch_size, num_steps, disable_tqdm=True):
+    batch_size_log2 = batch_size.bit_length()
+    batch_size_leftover = None
+    if 2 ** batch_size_log2 != batch_size:
+        batch_size_log2 -= 1
+        batch_size_leftover = batch_size - 2 ** batch_size_log2
+
+    if num_steps <= batch_size_log2:
+        print(f"The number of steps must be greater than log2(batch_size) to use a Hyperbatch scheduler: disabling Hyperbatch functionality.")
+        schedule = list(map(lambda i: (batch_size, 0, i), range(num_steps)))
+        assert len(schedule) == num_steps, f"len(schedule) != num_steps: {len(schedule)} != {num_steps}: {batch_size_log2} {schedule}"
+        return schedule
+
+    substep_length = num_steps // (batch_size_log2 + 1)
+    substeps = [0] * (substep_length - 1)
+    schedule = (substeps + [None]) * batch_size_log2 + substeps + [batch_size_leftover]
+    schedule += [0] * (num_steps - len(schedule))
+    current_batch_size = 1
+    def add_current_batch_size(i_appended_size):
+        nonlocal current_batch_size
+        i, appended_size = i_appended_size
+        if appended_size is None:
+            current_batch_size *= 2
+        else:
+            current_batch_size += appended_size
+        return (current_batch_size, appended_size, i)
+
+    schedule = list(tqdm.contrib.tmap(add_current_batch_size, enumerate(schedule), disable=disable_tqdm))
+    final_size = batch_doubling_schedule_validate_and_final_size(schedule)
+    assert batch_size == final_size, f"batch_size not equal to current_size: {batch_size} != {final_size} \n {schedule}"
+    assert len(schedule) == num_steps, f"len(schedule) != num_steps: {len(schedule)} != {num_steps}: {schedule}"
+    return schedule
+
+
 # Get the traces of which images were copied from which, for "hyperbatches."
 # 
 # A "Hyperbatch" sampler starts with one image/seed and doubles (up to batch size)
@@ -120,7 +187,7 @@ sys.path.remove(flip_pytorch_path)
 # For example, given `batch_size=7` and `num_steps=20`:
 #
 # ```
-# print(get_hyberbatch_traces(7, 20))
+# print(get_hyperbatch_traces(7, 20))
 # [[0, 0, 0, 0], [1, 1, 1, 0], [2, 2, 0, 0], [3, 3, 1, 0], [4, 0, 0, 0], [5, 1, 1, 0], [6, 2, 0, 0]]
 # 
 # [0, 0, 0, 0]
@@ -137,37 +204,11 @@ sys.path.remove(flip_pytorch_path)
 #  |  1st image, batch size 2^2
 #  1st image, batch size 2^3
 # ```
-def get_hyberbatch_traces(batch_size: int, num_steps: int):
+def get_hyperbatch_traces(batch_size: int, num_steps: int):
     trace_list = [[0]]
-    current_batch_size = 1
-    current_batch_size_log2 = 0
-    batch_size_log2 = batch_size.bit_length()
-    batch_size_leftover = 0
-    if 2 ** batch_size_log2 != batch_size:
-        batch_size_log2 -= 1
-        batch_size_leftover = batch_size - 2 ** batch_size_log2
 
-    # number of steps between doubling
-    num_sub_steps = batch_size_log2 + 1
-    sub_step_size = num_steps // num_sub_steps
-    if num_steps % num_sub_steps:
-        sub_step_final = sub_step_size * num_sub_steps
-    else:
-        sub_step_final = sub_step_size * batch_size_log2
-
-    for i in range(num_steps - 1):
-        if i != 0 and i % sub_step_size == 0:
-            if i == sub_step_final:
-                appended_size = batch_size_leftover
-            else:
-                appended_size = None
-
-            current_batch_size_log2 += 1
-            trace_list = list(map(lambda i_trace: [i_trace[0]] + i_trace[1], enumerate(trace_list + trace_list[0:appended_size])))
-            if appended_size is None:
-                current_batch_size = 2 * current_batch_size
-            else:
-                current_batch_size = current_batch_size + appended_size
+    for current_batch_size, appended_size, i in batch_doubling_schedule(batch_size, num_steps - 1, disable_tqdm=disable):
+        trace_list = list(map(lambda i_trace: [i_trace[0]] + i_trace[1], enumerate(trace_list + trace_list[0:appended_size])))
 
     assert len(trace_list) == batch_size
     return trace_list
@@ -189,7 +230,7 @@ def apply_hyperbatch_weights(
         trace_list_y, y = traced_y
         return (trace_list_x, trace_list_y, original_pair_metric((x, y)))
 
-    trace_list = get_hyberbatch_traces(batch_size, num_steps)
+    trace_list = get_hyperbatch_traces(batch_size, num_steps)
     traced_values = list(zip(trace_list, values))
     traced_values_len = len(traced_values)
     expected_total = (traced_values_len * (traced_values_len - 1)) / 2
