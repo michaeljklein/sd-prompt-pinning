@@ -207,7 +207,7 @@ def batch_doubling_schedule(batch_size, num_steps, disable_tqdm=True):
 def get_hyperbatch_traces(batch_size: int, num_steps: int):
     trace_list = [[0]]
 
-    for current_batch_size, appended_size, i in batch_doubling_schedule(batch_size, num_steps - 1, disable_tqdm=disable):
+    for current_batch_size, appended_size, i in batch_doubling_schedule(batch_size, num_steps - 1):
         trace_list = list(map(lambda i_trace: [i_trace[0]] + i_trace[1], enumerate(trace_list + trace_list[0:appended_size])))
 
     assert len(trace_list) == batch_size
