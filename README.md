@@ -148,6 +148,12 @@ for the plot-generation code.
 
 #### Hyperbatch Options
 
+Usage notes:
+- Hyperbatches are disabled when the number of steps is `<= floor(log2(Batch size))`.
+- Hyperbatches mess up `tqdm`'s (the progress bar library) time estimates: it's
+  expected that the estimate will be `2-5x` too high, depending on batch size
+  and number of steps. See the efficiency plots for more detail.
+
 In this section, `K` is the distance from the root of the binary tree,
 starting from `1`. E.g. the root of the tree has `K=1`, its leaves have `K=2`,
 their leaves `K=3`, etc.
