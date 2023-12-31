@@ -1662,8 +1662,9 @@ class PromptPinningScript(scripts.Script):
             try:
                 record = stats.compile(population)
                 logbook.record(evals=len(population), gen=gen, **record)
-            except TypeError as e:
+            except (TypeError, ValueError) as e:
                 print(f"compiling stats for population failed with error:\n  {e}")
+                print(f"current population:\n  {population}")
                 print()
 
             if cma_cli_log:

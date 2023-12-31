@@ -126,6 +126,7 @@ Why?
       images in a single batch
     * However, generating larger batches provides an unpredictable amount of
       certainty when calculating e.g. the ꟻLIP loss
+- In practice, it provides an appx. `10-20x` speedup on batch size `8` with `20` steps
 
 This is acheived by modifying
 [k-diffusion](https://github.com/crowsonkb/k-diffusion) samplers as follows:
