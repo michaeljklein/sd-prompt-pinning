@@ -9,13 +9,6 @@ based on:
 - [ꟻLIP](https://github.com/NVlabs/flip) as a basis for a custom loss function
 
 
-## Dependencies
-
-This extension optionally depends on
-[picobyte/stable-diffusion-webui-wd14-tagger](https://github.com/picobyte/stable-diffusion-webui-wd14-tagger)
-for image tagging. (In progress: it may make more sense to use a different extension.)
-
-
 ## Problem
 
 - Variation in prompts is hard to “pin down”: it can be difficult to tell which parts of the prompts are “locking in” a particular result.
@@ -30,22 +23,58 @@ for image tagging. (In progress: it may make more sense to use a different exten
         - Target images that ignore an image mask, e.g. fix parts of an image for animation, solely using the prompt!
         - CLIP-based analysis to allow pinning a result to a particular (set of) goal tag(s)
 
-
 ## Solution
 
 CMA (covariant matrix adaptation) is an efficient automatic evolutionary optimization method.
 - It’s fit for problems where the input is a matrix and the metric is smooth.
 - In practice, it converges exponentially.
-- Downside(s):
-  + Because it's difficult to specify “small” distance from original prompt,
-    the current approach is to limit the `L2`-norm from the original weights.
-    * This means that certain tokens could get “washed out” with larger allowed distances.
-  + A sufficiently-large sample is required _per attempt_.
-    For many cases, `8-16` images are likely sufficient, but assuming efficiency of “perfect” binary search,
-    it will require around `3*num_tokens` steps to converge, or `3*num_tokens*batch_size` images.
-    * By the way, binary search is about as efficient as Stable Diffusion:
-      a few manual experiments showed that `2^steps` is approximately `bits_of_output`
-      for "good" convergence, at least with `DPM++ SDE Karras`.
+
+Example run with 50 generations (optimized for size because original was `334.76 MB`):
+- Steps: "16"
+- Size: "768x512"
+
+![final_summary_optimized.gif](https://github.com/michaeljklein/sd-prompt-pinning-test-cases/blob/main/00000106/final_summary_optimized.gif)
+
+Final result (full quality):
+
+![best_generation_summary.gif](https://github.com/michaeljklein/sd-prompt-pinning-test-cases/blob/main/00000106/best_generation_summary.gif)
+
+
+## Features
+
+- Hyperbatch samplers: generate batches more quickly and with better variance distribution for pinning!
+  + `DPM++ 2M Karras - Hyperbatch`
+  + `DPM++ SDE Karras - Hyperbatch`
+  + `DPM++ SDE - Hyperbatch`
+- Pinning targets
+  + Visually pin to a generated batch
+  + Visually pin to a fixed image or batch
+  + (Coming soon?) Pin to a set of tags
+  + (Coming soon?) Pin to a local map of weights using UMAP + HDBSCAN
+- Generation settings
+  + Multi-objective size limiter: limit the distance explored from the original prompt
+  + Hyperbatch-specific weights:
+    * Geometric
+    * Exponential
+    * Polynomial
+- Analysis
+  + Per-individual:
+    * Statistics JSON
+    * Loss plots (histogram, etc.)
+    * Summary GIF
+  + Per-generation:
+    * Image loss distribution (and histogram)
+    * Individual loss distribution (and histogram)
+  + Per-run:
+    * HTML summary pages for each (see [here](https://github.com/michaeljklein/sd-prompt-pinning-test-cases) for examples)
+    * Evolution convergence plots
+
+
+## Dependencies
+
+This extension optionally depends on
+[picobyte/stable-diffusion-webui-wd14-tagger](https://github.com/picobyte/stable-diffusion-webui-wd14-tagger)
+for image tagging. (In progress: it may make more sense to use a different extension.)
 
 
 ## Guide
@@ -102,13 +131,12 @@ the default was picked from the following observances:
   and by eyeballing other examples, the multiplicative overhead is approximately `16` (when the algorithm is efficient)
 
 
-### Hyperbatches (in progress.. 🚧)
+### Hyperbatches
 
-Hyperbatches are an experimental feature that currently require a
-[fork of AUTOMATIC1111 Web UI](https://github.com/michaeljklein/stable-diffusion-webui/tree/michaeljklein/hyperbatch-samplers)
-for additional samplers.
+Hyperbatches are an experimental feature that no longer require a fork of
+AUTOMATIC1111 Web UI!
 
-The following samplers have been implemented in the fork:
+The following samplers have been implemented in this extension:
 - `DPM++ 2M Karras - Hyperbatch`
 - `DPM++ SDE Karras - Hyperbatch`
 - `DPM++ SDE - Hyperbatch`
@@ -150,8 +178,9 @@ for the plot-generation code.
 #### Hyperbatch Options
 
 Usage notes:
+- Pick a batch size that's a power of 2 for best results, i.e. `8, 16, 32, 64, 128, 256, ..`
 - Hyperbatches are disabled when the number of steps is `<= floor(log2(Batch size))`.
-- Hyperbatches mess up `tqdm`'s (the progress bar library) time estimates: it's
+- Hyperbatches mess up the progress bar library's time estimates: it's
   expected that the estimate will be `2-5x` too high, depending on batch size
   and number of steps. See the efficiency plots for more detail.
 
@@ -200,6 +229,7 @@ The simplest technique that I've found to be effective is to:
 4. Set the multi-objective size limiter also fairly small, but at least `<= 1`
    to ensure the prompts stay relatively close to the original.
 
+
 If no target image is used:
 
 1. Find a target prompt
@@ -230,6 +260,15 @@ distorted, or otherwise indistinct.
 
 #### Debugging
 
++ Keep `Batch count` at `1` for best results: increasing `lambda_` has a similar
+  effect (it's the number of batches per individual in a generation) and lets
+  the CMA algorithm see more data points.
++ A sufficiently-large sample is required _per attempt_.
+  For many cases, `8-16` images are likely sufficient, but assuming efficiency of “perfect” binary search,
+  it will require around `3*num_tokens` steps to converge, or `3*num_tokens*batch_size` images.
+  * By the way, binary search is about as efficient as Stable Diffusion:
+    a few manual experiments showed that `2^steps` is approximately `bits_of_output`
+    for "good" convergence, at least with `DPM++ SDE Karras`.
 - Upper right graph of `cma_plot.png` shows divergence
   + It's likely that it's not sampling "wide" enough, or is way too wide:
     * If way too wide, try lowering the initial population radius and STD
@@ -239,6 +278,9 @@ distorted, or otherwise indistinct.
     sort of "visual average" of all of the images.
   + By "visual average," I mean that it's an image that's approximately visually
     equidistant to an ensemble of images, according to the ꟻLIP loss function.
+- Because it's difficult to specify “small” distance from original prompt,
+  the current approach is to limit the `L2`-norm from the original weights.
+  * This means that certain tokens could get “washed out” with larger allowed distances. Try lowering them.
 
 
 ## Test runs (in progress.. 🚧)
