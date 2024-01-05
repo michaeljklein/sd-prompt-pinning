@@ -29,9 +29,11 @@ CMA (covariant matrix adaptation) is an efficient automatic evolutionary optimiz
 - It’s fit for problems where the input is a matrix and the metric is smooth.
 - In practice, it converges exponentially.
 
-Example run with 50 generations (optimized for size because original was `334.76 MB`):
+Example run with 50 generations:
 - Steps: "16"
 - Size: "768x512"
+- Duration: ~30 minutes
+- Optimized for size because the original was `334.76 MB`
 
 ![final_summary_optimized.gif](https://github.com/michaeljklein/sd-prompt-pinning-test-cases/blob/main/00000106/final_summary_optimized.gif)
 
