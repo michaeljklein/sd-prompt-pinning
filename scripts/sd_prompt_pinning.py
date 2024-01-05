@@ -16,7 +16,6 @@
 #   + one marble apple fruit, centered to the left on a metal steel chef table, rule of thirds, hd, perfect shading, professional photograph
 #   + 4K, bad quality, worst quality, computer, iphone, phone, render, rendering, bunch
 
-
 # import code
 # code.interact(local=locals())
 
@@ -55,6 +54,12 @@ from deap import base as deap_base
 from deap import creator as deap_creator 
 from deap import tools as deap_tools 
 import deap
+
+# local imports
+this_directory = os.path.dirname(__file__)
+sys.path.append(this_directory)
+from hyperbatch import *
+sys.path.remove(this_directory)
 
 # FLIP: https://github.com/NVlabs/flip
 #
@@ -103,6 +108,36 @@ sys.path.remove(flip_pytorch_path)
 #     from tagger import utils as tagger_utils
 #     sys.path.remove(tagger_path)
 
+
+####################################################################################
+# BEGIN ADD SAMPLERS
+####################################################################################
+
+######
+
+print('setting up prompt pinning samplers (hyperbatch)')
+
+samplers_k_diffusion_hyperbatch = [
+    ('DPM++ 2M Karras - Hyperbatch', sample_dpmpp_2m_hyperbatch, ['k_dpmpp_2m_ka_hyperbatch'], {'scheduler': 'karras'}),
+    ('DPM++ SDE Karras - Hyperbatch', sample_dpmpp_sde_hyperbatch, ['k_dpmpp_sde_ka_hyperbatch'], {'scheduler': 'karras', "second_order": True, "brownian_noise": True}),
+    ('DPM++ SDE - Hyperbatch', sample_dpmpp_sde_hyperbatch, ['k_dpmpp_sde_hyperbatch'], {"second_order": True, "brownian_noise": True}),
+]
+samplers_data_k_diffusion_hyperbatch = [
+    modules.sd_samplers_common.SamplerData(label, lambda model, funcname=funcname: modules.sd_samplers_kdiffusion.KDiffusionSampler(funcname, model), aliases, options)
+    for label, funcname, aliases, options in samplers_k_diffusion_hyperbatch
+    if callable(funcname) or hasattr(k_diffusion.sampling, funcname)
+]
+samplers_data_k_diffusion_hyperbatch_map = {x.name: x for x in samplers_data_k_diffusion_hyperbatch}
+
+modules.sd_samplers_kdiffusion.sampler_extra_params[sample_dpmpp_sde_hyperbatch] = ['s_noise']
+modules.sd_samplers.all_samplers += samplers_data_k_diffusion_hyperbatch
+modules.sd_samplers.all_samplers_map.update(samplers_data_k_diffusion_hyperbatch_map)
+
+# propagate all_samplers, all_samplers_map to the UI
+modules.sd_samplers.set_samplers()
+print('prompt pinning samplers setup.')
+
+
 ####################################################################################
 # END IMPORTS
 ####################################################################################
@@ -112,71 +147,73 @@ sys.path.remove(flip_pytorch_path)
 # BEGIN Hyperbatch
 ############################################################################################################
 
-def batch_doubling_schedule_validate_and_final_size(schedule):
-    current_index = 0
-    current_size = 1
-    for expected_current_size, appended_size, i in schedule:
-        assert current_index == i, f"current_index has unexpected value: {current_index} != {i}"
-        current_index += 1
-        if appended_size is None:
-            current_size *= 2
-        else:
-            current_size += appended_size
-        assert expected_current_size == current_size, f"expected_current_size != current_size: {expected_current_size} != {current_size}"
-
-    return current_size
-
-# The doubling pattern has shape:
+# TODO: cleanup duplicate batch schedule (w/ samplers)
 #
-# d steps, 2x, d steps, 2x, .., 2x, d steps, leftover/2x, d steps
+# def batch_doubling_schedule_validate_and_final_size(schedule):
+#     current_index = 0
+#     current_size = 1
+#     for expected_current_size, appended_size, i in schedule:
+#         assert current_index == i, f"current_index has unexpected value: {current_index} != {i}"
+#         current_index += 1
+#         if appended_size is None:
+#             current_size *= 2
+#         else:
+#             current_size += appended_size
+#         assert expected_current_size == current_size, f"expected_current_size != current_size: {expected_current_size} != {current_size}"
 #
-# K 2x’s/leftovers
-# K*d + d = (K+1)*d = steps
-# steps/(K + 1) = d
-# zs = [0] * d
+#     return current_size
 #
-# If leftovers
-#   (zs + [None]) * (K-1) + zs + leftovers + zs
-# Else
-#   (zs + [None]) * K + zs
+# # The doubling pattern has shape:
+# #
+# # d steps, 2x, d steps, 2x, .., 2x, d steps, leftover/2x, d steps
+# #
+# # K 2x’s/leftovers
+# # K*d + d = (K+1)*d = steps
+# # steps/(K + 1) = d
+# # zs = [0] * d
+# #
+# # If leftovers
+# #   (zs + [None]) * (K-1) + zs + leftovers + zs
+# # Else
+# #   (zs + [None]) * K + zs
+# #
+# # Note: this function asserts that the schedule:
+# # - is an Iterator[tuple[current_size, appended_size | None, int]]
+# # - list(map(lambda x: x[-1], schedule)) == list(range(num_steps))
+# # - map(lambda x: x[1], output) == range(num_steps)
+# # - the batch_size's increase as expected
+# def batch_doubling_schedule(batch_size, num_steps, disable_tqdm=True):
+#     batch_size_log2 = batch_size.bit_length()
+#     batch_size_leftover = None
+#     if 2 ** batch_size_log2 != batch_size:
+#         batch_size_log2 -= 1
+#         batch_size_leftover = batch_size - 2 ** batch_size_log2
 #
-# Note: this function asserts that the schedule:
-# - is an Iterator[tuple[current_size, appended_size | None, int]]
-# - list(map(lambda x: x[-1], schedule)) == list(range(num_steps))
-# - map(lambda x: x[1], output) == range(num_steps)
-# - the batch_size's increase as expected
-def batch_doubling_schedule(batch_size, num_steps, disable_tqdm=True):
-    batch_size_log2 = batch_size.bit_length()
-    batch_size_leftover = None
-    if 2 ** batch_size_log2 != batch_size:
-        batch_size_log2 -= 1
-        batch_size_leftover = batch_size - 2 ** batch_size_log2
-
-    if num_steps <= batch_size_log2:
-        print(f"The number of steps must be greater than log2(batch_size) to use a Hyperbatch scheduler: disabling Hyperbatch functionality.")
-        schedule = list(map(lambda i: (batch_size, 0, i), range(num_steps)))
-        assert len(schedule) == num_steps, f"len(schedule) != num_steps: {len(schedule)} != {num_steps}: {batch_size_log2} {schedule}"
-        return schedule
-
-    substep_length = num_steps // (batch_size_log2 + 1)
-    substeps = [0] * (substep_length - 1)
-    schedule = (substeps + [None]) * batch_size_log2 + substeps + [batch_size_leftover]
-    schedule += [0] * (num_steps - len(schedule))
-    current_batch_size = 1
-    def add_current_batch_size(i_appended_size):
-        nonlocal current_batch_size
-        i, appended_size = i_appended_size
-        if appended_size is None:
-            current_batch_size *= 2
-        else:
-            current_batch_size += appended_size
-        return (current_batch_size, appended_size, i)
-
-    schedule = list(tqdm.contrib.tmap(add_current_batch_size, enumerate(schedule), disable=disable_tqdm))
-    final_size = batch_doubling_schedule_validate_and_final_size(schedule)
-    assert batch_size == final_size, f"batch_size not equal to current_size: {batch_size} != {final_size} \n {schedule}"
-    assert len(schedule) == num_steps, f"len(schedule) != num_steps: {len(schedule)} != {num_steps}: {schedule}"
-    return schedule
+#     if num_steps <= batch_size_log2:
+#         print(f"The number of steps must be greater than log2(batch_size) to use a Hyperbatch scheduler: disabling Hyperbatch functionality.")
+#         schedule = list(map(lambda i: (batch_size, 0, i), range(num_steps)))
+#         assert len(schedule) == num_steps, f"len(schedule) != num_steps: {len(schedule)} != {num_steps}: {batch_size_log2} {schedule}"
+#         return schedule
+#
+#     substep_length = num_steps // (batch_size_log2 + 1)
+#     substeps = [0] * (substep_length - 1)
+#     schedule = (substeps + [None]) * batch_size_log2 + substeps + [batch_size_leftover]
+#     schedule += [0] * (num_steps - len(schedule))
+#     current_batch_size = 1
+#     def add_current_batch_size(i_appended_size):
+#         nonlocal current_batch_size
+#         i, appended_size = i_appended_size
+#         if appended_size is None:
+#             current_batch_size *= 2
+#         else:
+#             current_batch_size += appended_size
+#         return (current_batch_size, appended_size, i)
+#
+#     schedule = list(tqdm.contrib.tmap(add_current_batch_size, enumerate(schedule), disable=disable_tqdm))
+#     final_size = batch_doubling_schedule_validate_and_final_size(schedule)
+#     assert batch_size == final_size, f"batch_size not equal to current_size: {batch_size} != {final_size} \n {schedule}"
+#     assert len(schedule) == num_steps, f"len(schedule) != num_steps: {len(schedule)} != {num_steps}: {schedule}"
+#     return schedule
 
 
 # Get the traces of which images were copied from which, for "hyperbatches."
@@ -210,7 +247,10 @@ def get_hyperbatch_traces(batch_size: int, num_steps: int):
     for current_batch_size, appended_size, i in batch_doubling_schedule(batch_size, num_steps - 1):
         trace_list = list(map(lambda i_trace: [i_trace[0]] + i_trace[1], enumerate(trace_list + trace_list[0:appended_size])))
 
-    assert len(trace_list) == batch_size
+    assert_size_str = """the number of traces does not match the 'Batch size'
+        (did you make sure to use enough steps?):
+        len(trace_list) {len(trace_list)} != batch_size {batch_size}"""
+    assert len(trace_list) == batch_size, assert_size_str
     return trace_list
 
 # values: list[A]
@@ -714,6 +754,7 @@ def to_token_attention(text: str) -> tuple[list[tuple[str, float]], str]:
 # TODO: extract into functions/classes
 
 
+
 ############################################################################################################
 # DETERMINISTIC-ENOUGH SAVING
 ############################################################################################################
@@ -901,6 +942,11 @@ class PromptPinFiles:
 ############################################################################################################
 # END DETERMINISTIC-ENOUGH SAVING
 ############################################################################################################
+
+
+####################################################################################
+# UMAP + fast_hdbscan
+####################################################################################
 
 
 ############################################################################################################
@@ -1417,7 +1463,7 @@ class PromptPinningScript(scripts.Script):
             try:
                 most_recent_processed = process_images(new_processing_instance)
             except Exception as e:
-                errors.display(e, "generating image for prompt pinning")
+                print(e, "generating image for prompt pinning")
                 most_recent_processed = Processed(new_processing_instance, [], new_processing_instance.seed, "")
                 process_images_seconds = float('NaN')
 
@@ -1557,13 +1603,17 @@ class PromptPinningScript(scripts.Script):
 
 
         # # TODO: cleanup if warning goes away (has already been created..)
-        if 'deap_creator.FitnessMin' in globals():
-            del deap_creator.FitnessMin
-        if 'deap_creator.Individual' in globals():
-            del deap_creator.Individual
+        if 'FitnessMin' in globals():
+            del FitnessMin
+        if 'Individual' in globals():
+            del Individual
 
         # we want to minimize the derived FLIP metric(s)
-        deap_creator.create("FitnessMin", deap_base.Fitness, weights=(-1.0,))
+        fitness_min_creation = deap_creator.create("FitnessMin", deap_base.Fitness, weights=(-1.0,))
+        # TODO: DEBUG
+        print('fitness_min_creation')
+        print(fitness_min_creation)
+        print()
 
         # individuals are numpy.ndarray's of shape=(number_of_tokens,)
         deap_creator.create("Individual", np.ndarray, fitness=deap_creator.FitnessMin)
@@ -1653,8 +1703,28 @@ class PromptPinningScript(scripts.Script):
                 ind.fitness.values = fit
                 fitness_history.append(fit)
 
-            # Update the strategy with the evaluated individuals
-            toolbox.update(population)
+            try:
+                # Update the strategy with the evaluated individuals
+                toolbox.update(population)
+            # TODO: IndexError of unknown cause when targetting single image w/ limit, hyperbatch size 8
+            except IndexError as e:
+                print(f"updating population failed with error:\n  {e}")
+                print()
+                print('population')
+                print(population)
+                print()
+                print('population')
+                for x in population:
+                    print(x)
+                    print(x.fitness)
+                    print(x.fitness.values)
+                    print()
+                print()
+
+                # TODO: debug
+                # code.interact(local=locals())
+                raise e
+
 
             # Update the hall of fame and the statistics with the
             # currently evaluated population
@@ -1671,7 +1741,7 @@ class PromptPinningScript(scripts.Script):
                 print('gen, evals, std, min, avg, max')
                 try:
                     print(logbook.stream)
-                except ValueError as e:
+                except (IndexError, ValueError) as e:
                     print(f"printing lobgook failed with error:\n  {e}")
                     print()
 

@@ -4,6 +4,7 @@ sd-prompt-pinning-test-cases/
 .DS_Store
 __pycache__/
 
+deap/
 flip/
 
 README_AWS.md
